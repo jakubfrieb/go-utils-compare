@@ -1,4 +1,4 @@
-module go-compare
+module github.com/jakubfrieb/go-utils-compare
 
 go 1.23.0
 

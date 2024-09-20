@@ -5,5 +5,9 @@ multiple cron jobs configurations and need to know what is different between the
 
 Comparing is based on command, name and schedule and result is presented in a table.
 
+# Installation
 
+```bash
+go install github.com/jakubfrieb/go-utils-compare@latest
+```
 
