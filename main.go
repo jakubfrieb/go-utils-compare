@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -29,7 +31,14 @@ type Config struct {
 	CronJobs []CronJob `yaml:"cronjobs"`
 }
 
-// Create a map of cronjobs by name for easy lookup
+// JSON structure to hold differences
+type JobDifference struct {
+	CronName    string `json:"cron_name"`
+	Type        string `json:"type"`
+	Production  string `json:"production,omitempty"`
+	Development string `json:"development,omitempty"`
+}
+
 func createCronJobMap(cronJobs []CronJob) map[string]CronJob {
 	jobMap := make(map[string]CronJob)
 	for _, job := range cronJobs {
@@ -38,82 +47,101 @@ func createCronJobMap(cronJobs []CronJob) map[string]CronJob {
 	return jobMap
 }
 
-// Create a map of cronjobs by command to check for duplicate commands with different names
-func createCommandMap(cronJobs []CronJob) map[string]string {
-	commandMap := make(map[string]string)
-	for _, job := range cronJobs {
-		commandMap[job.Command] = job.Name
-	}
-	return commandMap
-}
-
 // Helper function to normalize commands by collapsing multiple spaces
 func normalizeCommand(command string) string {
 	return strings.Join(strings.Fields(command), " ")
 }
 
-func compareCommands(prodFile, devFile string, prodConfig, devConfig *Config) {
+func compareCommands(prodFile, devFile string, prodConfig, devConfig *Config, jsonOutput bool) {
 	prodCronJobs := createCronJobMap(prodConfig.CronJobs)
 	devCronJobs := createCronJobMap(devConfig.CronJobs)
 
-	prodCommands := createCommandMap(prodConfig.CronJobs)
-	devCommands := createCommandMap(devConfig.CronJobs)
+	// List to hold differences in case of JSON output
+	var differences []JobDifference
 
-	// Set up the tab writer for formatted output with padding
-	w := tabwriter.NewWriter(os.Stdout, 10, 8, 3, ' ', 0)
-
-	// Print header/legend
-	fmt.Printf("Comparing Cron Jobs:\n")
-	fmt.Printf("Production File: %s\n", prodFile)
-	fmt.Printf("Development File: %s\n", devFile)
-	fmt.Printf("\n")
-
-	// Print table headers
-	fmt.Fprintf(w, "%-40s\t%-70s\n", "Cron Name", "Difference")
-	fmt.Fprintf(w, "%-40s\t%-70s\n", "---------", "----------")
-
-	// Check for cronjobs in production that are missing or different in development
-	for name, prodJob := range prodCronJobs {
-		var differences string
-
-		if devJob, exists := devCronJobs[name]; exists {
-			// Normalize commands before comparing
-			if normalizeCommand(prodJob.Command) != normalizeCommand(devJob.Command) {
-				differences += fmt.Sprintf("%sCommand difference:\n  Production: %s\n  Development: %s%s\n", Red, prodJob.Command, devJob.Command, Reset)
+	if jsonOutput {
+		// Collect differences in JSON format
+		for name, prodJob := range prodCronJobs {
+			if devJob, exists := devCronJobs[name]; exists {
+				if normalizeCommand(prodJob.Command) != normalizeCommand(devJob.Command) {
+					differences = append(differences, JobDifference{
+						CronName:   name,
+						Type:       "Command Difference",
+						Production: prodJob.Command,
+						Development: devJob.Command,
+					})
+				}
+				if prodJob.Schedule != devJob.Schedule {
+					differences = append(differences, JobDifference{
+						CronName:   name,
+						Type:       "Schedule Difference",
+						Production: prodJob.Schedule,
+						Development: devJob.Schedule,
+					})
+				}
+			} else {
+				differences = append(differences, JobDifference{
+					CronName: name,
+					Type:     "Exists in production but not in development",
+				})
 			}
-			// Compare schedules for jobs with the same name
-			if prodJob.Schedule != devJob.Schedule {
-				differences += fmt.Sprintf("%sSchedule difference:\n  Production: %s\n  Development: %s%s\n", Yellow, prodJob.Schedule, devJob.Schedule, Reset)
+		}
+
+		for name := range devCronJobs {
+			if _, exists := prodCronJobs[name]; !exists {
+				differences = append(differences, JobDifference{
+					CronName: name,
+					Type:     "Exists in development but not in production",
+				})
 			}
-		} else {
-			// If name does not exist, check if command exists under a different name
-			if devName, exists := devCommands[prodJob.Command]; exists {
-				differences = fmt.Sprintf("Command found with different name in development: %s", devName)
+		}
+
+		// Output as JSON
+		jsonData, err := json.MarshalIndent(differences, "", "  ")
+		if err != nil {
+			log.Fatalf("Error marshalling to JSON: %v", err)
+		}
+		fmt.Println(string(jsonData))
+
+	} else {
+		// Human-readable output
+		w := tabwriter.NewWriter(os.Stdout, 10, 8, 3, ' ', 0)
+
+		fmt.Printf("Comparing Cron Jobs:\n")
+		fmt.Printf("Production File: %s\n", prodFile)
+		fmt.Printf("Development File: %s\n", devFile)
+		fmt.Printf("\n")
+
+		fmt.Fprintf(w, "%-40s\t%-70s\n", "Cron Name", "Difference")
+		fmt.Fprintf(w, "%-40s\t%-70s\n", "---------", "----------")
+
+		for name, prodJob := range prodCronJobs {
+			var differences string
+
+			if devJob, exists := devCronJobs[name]; exists {
+				if normalizeCommand(prodJob.Command) != normalizeCommand(devJob.Command) {
+					differences += fmt.Sprintf("%sCommand difference:\n  Production: %s\n  Development: %s%s\n", Red, prodJob.Command, devJob.Command, Reset)
+				}
+				if prodJob.Schedule != devJob.Schedule {
+					differences += fmt.Sprintf("%sSchedule difference:\n  Production: %s\n  Development: %s%s\n", Yellow, prodJob.Schedule, devJob.Schedule, Reset)
+				}
 			} else {
 				differences = fmt.Sprintf("%sExists in production but not in development%s", LightBlue, Reset)
 			}
+
+			if differences != "" {
+				fmt.Fprintf(w, "%-40s\t%-70s\n", name, differences)
+			}
 		}
 
-		// If there are any differences, print the cronjob info
-		if differences != "" {
-			fmt.Fprintf(w, "%-40s\t%-70s\n", name, differences)
-		}
-	}
-
-	// Check for cronjobs in development that are missing in production
-	for name, devJob := range devCronJobs {
-		if _, exists := prodCronJobs[name]; !exists {
-			// If name does not exist in production, check if the command exists under a different name
-			if prodName, exists := prodCommands[devJob.Command]; exists {
-				fmt.Fprintf(w, "%-40s\t%-70s\n", name, fmt.Sprintf("Command found with different name in production: %s", prodName))
-			} else {
+		for name := range devCronJobs {
+			if _, exists := prodCronJobs[name]; !exists {
 				fmt.Fprintf(w, "%-40s\t%-70s\n", name, fmt.Sprintf("%sExists in development but not in production%s", LightBlue, Reset))
 			}
 		}
-	}
 
-	// Flush the tab writer to ensure the output is printed in a formatted manner
-	w.Flush()
+		w.Flush()
+	}
 }
 
 func parseYAML(path string) (*Config, error) {
@@ -130,12 +158,16 @@ func parseYAML(path string) (*Config, error) {
 }
 
 func main() {
-	if len(os.Args) < 3 {
+	// Add --json flag to switch output to JSON format
+	jsonOutput := flag.Bool("json", false, "Output differences in JSON format")
+	flag.Parse()
+
+	if len(flag.Args()) < 2 {
 		log.Fatalf("Usage: %s <production-yaml> <development-yaml>\n", os.Args[0])
 	}
 
-	prodFile := os.Args[1]
-	devFile := os.Args[2]
+	prodFile := flag.Arg(0)
+	devFile := flag.Arg(1)
 
 	prodConfig, err := parseYAML(prodFile)
 	if err != nil {
@@ -147,5 +179,5 @@ func main() {
 		log.Fatalf("Error reading development YAML: %v\n", err)
 	}
 
-	compareCommands(prodFile, devFile, prodConfig, devConfig)
+	compareCommands(prodFile, devFile, prodConfig, devConfig, *jsonOutput)
 }

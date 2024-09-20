@@ -7,9 +7,21 @@ Comparing is based on command, name and schedule and result is presented in a ta
 
 ## Installation
 
+Basic use
+
 ```bash
 go run github.com/jakubfrieb/go-utils-compare@latest \ 
     ../magento-values.yaml \
     ../magento-values.yaml
 ```
+Automated processing
+For json output you can add --json flag
+
+```bash 
+go run github.com/jakubfrieb/go-utils-compare@latest \
+    --json \
+    ../magento-values.yaml \
+    ../magento-values.yaml
+```
+
 
