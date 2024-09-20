@@ -5,9 +5,18 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"gopkg.in/yaml.v2"
+)
+
+// ANSI color codes
+const (
+	Reset       = "\033[0m"
+	Yellow      = "\033[33m"
+	Red         = "\033[31m"
+	LightBlue   = "\033[94m"
 )
 
 type CronJob struct {
@@ -38,6 +47,11 @@ func createCommandMap(cronJobs []CronJob) map[string]string {
 	return commandMap
 }
 
+// Helper function to normalize commands by collapsing multiple spaces
+func normalizeCommand(command string) string {
+	return strings.Join(strings.Fields(command), " ")
+}
+
 func compareCommands(prodFile, devFile string, prodConfig, devConfig *Config) {
 	prodCronJobs := createCronJobMap(prodConfig.CronJobs)
 	devCronJobs := createCronJobMap(devConfig.CronJobs)
@@ -63,20 +77,20 @@ func compareCommands(prodFile, devFile string, prodConfig, devConfig *Config) {
 		var differences string
 
 		if devJob, exists := devCronJobs[name]; exists {
-			// Compare commands for jobs with the same name
-			if prodJob.Command != devJob.Command {
-				differences += fmt.Sprintf("Command difference:\n  Production: %s\n  Development: %s\n", prodJob.Command, devJob.Command)
+			// Normalize commands before comparing
+			if normalizeCommand(prodJob.Command) != normalizeCommand(devJob.Command) {
+				differences += fmt.Sprintf("%sCommand difference:\n  Production: %s\n  Development: %s%s\n", Red, prodJob.Command, devJob.Command, Reset)
 			}
 			// Compare schedules for jobs with the same name
 			if prodJob.Schedule != devJob.Schedule {
-				differences += fmt.Sprintf("Schedule difference:\n  Production: %s\n  Development: %s\n", prodJob.Schedule, devJob.Schedule)
+				differences += fmt.Sprintf("%sSchedule difference:\n  Production: %s\n  Development: %s%s\n", Yellow, prodJob.Schedule, devJob.Schedule, Reset)
 			}
 		} else {
 			// If name does not exist, check if command exists under a different name
 			if devName, exists := devCommands[prodJob.Command]; exists {
 				differences = fmt.Sprintf("Command found with different name in development: %s", devName)
 			} else {
-				differences = "Exists in production but not in development"
+				differences = fmt.Sprintf("%sExists in production but not in development%s", LightBlue, Reset)
 			}
 		}
 
@@ -93,7 +107,7 @@ func compareCommands(prodFile, devFile string, prodConfig, devConfig *Config) {
 			if prodName, exists := prodCommands[devJob.Command]; exists {
 				fmt.Fprintf(w, "%-40s\t%-70s\n", name, fmt.Sprintf("Command found with different name in production: %s", prodName))
 			} else {
-				fmt.Fprintf(w, "%-40s\t%-70s\n", name, "Exists in development but not in production")
+				fmt.Fprintf(w, "%-40s\t%-70s\n", name, fmt.Sprintf("%sExists in development but not in production%s", LightBlue, Reset))
 			}
 		}
 	}
